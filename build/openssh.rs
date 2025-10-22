@@ -74,15 +74,40 @@ pub fn get_my_prefs() -> anyhow::Result<MyPrefs> {
 
 fn clone_openssh(path: &Path) -> anyhow::Result<()> {
     let repo_url = "https://github.com/openssh/openssh-portable.git";
-    let repo = git2::Repository::clone(repo_url, path)?;
+    let tag_ref_name = format!("refs/tags/{OPENSSH_TAG}");
 
-    let obj = repo.revparse_single(OPENSSH_TAG)?;
+    let mut fetch =
+        gix::prepare_clone(repo_url, path)?.with_ref_name(Some(tag_ref_name.as_str()))?;
 
-    let commit = obj.peel_to_commit()?;
+    let (mut checkout, _) =
+        fetch.fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
+    let (mut repo, _) =
+        checkout.main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
 
-    repo.checkout_tree(&obj, None)?;
+    repo.committer_or_set_generic_fallback()?;
 
-    repo.set_head_detached(commit.id())?;
+    let tag_commit_id = {
+        let mut tag_ref = repo.find_reference(tag_ref_name.as_str())?;
+        tag_ref.peel_to_id_in_place()?.detach()
+    };
+
+    use gix::refs::Target;
+    use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+
+    let head: gix::refs::FullName = "HEAD".try_into()?;
+    repo.edit_reference(RefEdit {
+        change: Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: format!("checkout: {OPENSSH_TAG}").into(),
+            },
+            expected: PreviousValue::Any,
+            new: Target::Object(tag_commit_id),
+        },
+        name: head,
+        deref: false,
+    })?;
 
     Ok(())
 }
