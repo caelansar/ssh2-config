@@ -266,7 +266,11 @@ impl SshConfigParser {
             Field::IdentityFile => {
                 let value = Self::parse_path_list(args)?;
                 trace!("identity_file: {value:?}",);
-                params.identity_file = Some(value);
+                if let Some(identity_file) = params.identity_file.as_mut() {
+                    identity_file.extend(value);
+                } else {
+                    params.identity_file = Some(value);
+                }
             }
             Field::IgnoreUnknown => {
                 let value = Self::parse_comma_separated_list(args)?;
@@ -2029,5 +2033,37 @@ Host fridge
             inc3: inc3_file,
             inc4: inc4_file,
         }
+    }
+
+    #[test]
+    fn test_multiple_identity_files() {
+        crate::test_log();
+
+        let config = r##"
+        Host test-host
+            IdentityFile ~/.ssh/id_rsa_good
+            IdentityFile ~/.ssh/id_rsa_also_good
+        "##;
+
+        let mut reader = BufReader::new(config.as_bytes());
+
+        let config = SshConfig::default()
+            .default_algorithms(DefaultAlgorithms::empty())
+            .parse(&mut reader, ParseRule::STRICT)
+            .unwrap();
+
+        let home_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .to_string_lossy()
+            .to_string();
+
+        let params = config.query("test-host");
+        assert_eq!(
+            params.identity_file.unwrap(),
+            vec![
+                PathBuf::from(format!("{home_dir}/.ssh/id_rsa_good")),
+                PathBuf::from(format!("{home_dir}/.ssh/id_rsa_also_good")),
+            ]
+        );
     }
 }
